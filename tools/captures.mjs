@@ -1,0 +1,61 @@
+// Captures d'écran du parcours (DA et régressions visuelles). Usage : node tools/captures.mjs <dossier> [url]
+import { chromium, devices } from '@playwright/test';
+import { mkdirSync } from 'node:fs';
+
+const OUT = process.argv[2] ?? 'captures';
+const BASE = process.argv[3] ?? 'http://localhost:4317/';
+mkdirSync(OUT, { recursive: true });
+const browser = await chromium.launch(process.env.PW_CHROMIUM ? { executablePath: process.env.PW_CHROMIUM } : {});
+const ctx = await browser.newContext({ ...devices['Pixel 7'] });
+const page = await ctx.newPage();
+page.on('pageerror', (e) => console.log('PAGEERR', e.message));
+const shot = async (name) => { await page.screenshot({ path: `${OUT}/${name}.png` }); console.log('capture', name); };
+const click = async (id) => { await page.click(`[data-testid="${id}"]`); await page.waitForTimeout(500); };
+const tapSlot = async (slot) => {
+  const p = await page.evaluate((s) => window.__kevspire.session.slotScreen(s), slot);
+  await page.mouse.click(p.x, p.y - 10);
+  await page.waitForTimeout(450);
+};
+
+// Sauvegarde de démonstration : campagne bien avancée.
+await page.goto(BASE);
+await page.evaluate(() => localStorage.clear());
+await page.waitForTimeout(1500);
+await shot('01_titre');
+await click('jouer');
+await shot('02_niveaux');
+await click('niveau-1');
+await page.waitForTimeout(900);
+await shot('03_lumi');
+await click('dialogue');
+await tapSlot(0);
+await click('construire-baliste');
+await shot('04_menu_radial');
+await click('construire-baliste');
+await tapSlot(3);
+await click('construire-cloche');
+await click('construire-cloche');
+await tapSlot(0);
+await shot('05_fiche_tourelle');
+await page.mouse.click(200, 120);
+await click('appel-vague');
+await page.waitForTimeout(1200);
+await shot('06_premiere_vague');
+await page.goto(`${BASE}?level=5&bot=1&speed=3&seed=4`);
+await page.waitForTimeout(26000);
+await shot('07_essaim_nuit');
+await page.goto(`${BASE}?level=9&bot=1&speed=4&seed=2`);
+await page.waitForTimeout(40000);
+await shot('08_orage');
+await page.goto(`${BASE}?level=1&bot=1&speed=8&seed=1`);
+await page.waitForSelector('[data-testid="victoire"]', { timeout: 120000 });
+await page.waitForTimeout(1800);
+await shot('09_victoire');
+await click('menu');
+await page.click('[data-testid="retour"]');
+await click('atelier');
+await shot('10_atelier');
+await page.click('[data-testid="retour"]');
+await click('bestiaire');
+await shot('11_bestiaire');
+await browser.close();
