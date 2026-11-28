@@ -1,7 +1,8 @@
 import type { DamageType } from '../core/types';
 import { ENEMIES } from '../data/enemies';
 import { FLOORS } from '../data/floors';
-import { FLOOR_H, WALL_LEFT, WALL_RIGHT, heartPos, slotPos, towerTop } from '../data/geometry';
+import { CENTER_X, FLOOR_H, WALL_LEFT, WALL_RIGHT, heartY, slotX, slotY, towerTop } from '../data/geometry';
+import { releaseEnemy } from './pool';
 import { spawnEnemy } from './spawn';
 import type { Enemy, GameState } from './state';
 
@@ -88,22 +89,19 @@ function updateClimber(state: GameState, e: Enemy, step: number): void {
     return;
   }
   // Sur la couronne : marche vers le Cœur.
-  const heart = heartPos(state.floors.length);
-  if (moveTo(e, heart.x, heart.y, step)) leak(state, e);
+  if (moveTo(e, CENTER_X, heartY(state.floors.length), step)) leak(state, e);
 }
 
 function updateFlier(state: GameState, e: Enemy, step: number, dt: number): void {
   let tx: number;
   let ty: number;
   if (e.targetSlot >= 0 && state.slots[e.targetSlot]) {
-    const p = slotPos(e.targetSlot, state.floors.length);
-    tx = p.x;
-    ty = p.y + 20;
+    tx = slotX(e.targetSlot);
+    ty = slotY(e.targetSlot, state.floors.length) + 20;
   } else {
     e.targetSlot = -1;
-    const heart = heartPos(state.floors.length);
-    tx = heart.x;
-    ty = heart.y;
+    tx = CENTER_X;
+    ty = heartY(state.floors.length);
   }
   e.wobble += dt * 3;
   const before = e.x;
@@ -159,27 +157,39 @@ export function updateEnemies(state: GameState, dt: number): void {
  * de l'atteindre (progress = -distance restante), qu'elle grimpe ou qu'elle vole.
  */
 export function remainingDistance(state: GameState, e: Enemy): number {
-  const heart = heartPos(state.floors.length);
-  if (e.phase === 'fly' || e.phase === 'top') return Math.hypot(heart.x - e.x, heart.y - e.y);
+  const hy = heartY(state.floors.length);
+  if (e.phase === 'fly' || e.phase === 'top') return Math.hypot(CENTER_X - e.x, hy - e.y);
   const top = towerTop(state.floors.length);
-  const crown = Math.hypot(heart.x - e.x, heart.y - top);
+  const crown = Math.hypot(CENTER_X - e.x, hy - top);
   if (e.phase === 'climb') return top - e.y + crown;
   const wallX = e.side < 0 ? WALL_LEFT : WALL_RIGHT;
   const fromGround = e.phase === 'burrow' ? Math.max(0, top - e.emergeY) : top;
   return Math.abs(e.x - wallX) + fromGround + crown;
 }
 
-/** Retire les ennemis morts (échange avec le dernier, sans allocation). */
+/** Retire les ennemis morts (échange avec le dernier, sans allocation) et les rend à la réserve. */
 export function compactEnemies(state: GameState): void {
   const list = state.enemies;
   let n = list.length;
   for (let i = 0; i < n; ) {
-    if ((list[i] as Enemy).hp <= 0) {
+    const e = list[i] as Enemy;
+    if (e.hp <= 0) {
+      releaseEnemy(e);
       list[i] = list[n - 1] as Enemy;
       n--;
     } else i++;
   }
   list.length = n;
+}
+
+/** Recherche par identifiant sans fermeture (boucles chaudes). */
+export function findEnemy(state: GameState, id: number): Enemy | undefined {
+  const list = state.enemies;
+  for (let i = 0; i < list.length; i++) {
+    const e = list[i] as Enemy;
+    if (e.id === id) return e;
+  }
+  return undefined;
 }
 
 /** Une Brumâme est-elle visée par les tourelles ? (les fouisseurs enfouis ne le sont pas) */

@@ -1,11 +1,13 @@
 import { dist2 } from '../core/math';
-import { damageEnemy, isAir, isTargetable } from './enemies';
+import { damageEnemy, findEnemy, isAir, isTargetable } from './enemies';
+import { releaseProjectile } from './pool';
 import type { GameState, Projectile } from './state';
 
 const BOLT_HIT_RADIUS = 14;
 
 function updateBolt(state: GameState, p: Projectile, dt: number): void {
-  const target = state.enemies.find((e) => e.id === p.targetId && isTargetable(e));
+  const found = findEnemy(state, p.targetId);
+  const target = found && isTargetable(found) ? found : undefined;
   if (target) {
     p.tx = target.x;
     p.ty = target.y;
@@ -55,6 +57,13 @@ export function updateProjectiles(state: GameState, dt: number): void {
   for (let i = 0; i < list.length; i++) {
     const p = list[i] as Projectile;
     if (p.alive) list[n++] = p;
+    else releaseProjectile(p);
   }
   list.length = n;
+}
+
+/** Vide la liste des projectiles en les rendant à la réserve (fin de vague). */
+export function clearProjectiles(state: GameState): void {
+  for (const p of state.projectiles) releaseProjectile(p);
+  state.projectiles.length = 0;
 }

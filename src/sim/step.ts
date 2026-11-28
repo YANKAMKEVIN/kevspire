@@ -11,7 +11,9 @@ export const FIXED_DT = 1 / 60;
 export function step(state: GameState, dt: number = FIXED_DT): void {
   if (state.phase === 'choose' || state.phase === 'won' || state.phase === 'lost') return;
   state.time += dt;
-  for (const ab of Object.values(state.abilities)) if (ab.cooldown > 0) ab.cooldown = Math.max(0, ab.cooldown - dt);
+  const { eclat, rafale } = state.abilities;
+  if (eclat.cooldown > 0) eclat.cooldown = Math.max(0, eclat.cooldown - dt);
+  if (rafale.cooldown > 0) rafale.cooldown = Math.max(0, rafale.cooldown - dt);
   if (state.phase === 'prep') {
     state.countdown -= dt;
     if (state.countdown <= 0) startWave(state);

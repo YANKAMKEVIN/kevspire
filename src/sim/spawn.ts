@@ -6,6 +6,7 @@ import { getLevel } from '../data/levels';
 import type { SpawnGroup, WaveDef } from '../data/levels';
 import { endlessHpScale, endlessWave } from './endless';
 import { remainingDistance } from './enemies';
+import { acquireEnemy } from './pool';
 import type { Enemy, GameState } from './state';
 
 export function waveDef(state: GameState, index: number): WaveDef | null {
@@ -19,36 +20,41 @@ export function enemyHp(state: GameState, kind: EnemyKind): number {
   return Math.round(ENEMIES[kind].hp * waveScale);
 }
 
-function occupiedSlots(state: GameState): number[] {
-  const out: number[] = [];
-  state.slots.forEach((t, i) => {
-    if (t) out.push(i);
-  });
-  return out;
+/** Tire un emplacement occupé au hasard (même tirage que sur la liste des occupés), ou -1. */
+function randomOccupiedSlot(state: GameState): number {
+  let count = 0;
+  for (const t of state.slots) if (t) count++;
+  if (count === 0) return -1;
+  let k = Math.floor(nextFloat(state.rng) * count);
+  for (let i = 0; i < state.slots.length; i++) {
+    if (!state.slots[i]) continue;
+    if (k-- === 0) return i;
+  }
+  return -1;
 }
 
 export function spawnEnemy(state: GameState, kind: EnemyKind, side: Side, opts: Partial<Enemy> = {}): Enemy {
   const def = ENEMIES[kind];
   const hp = enemyHp(state, kind);
-  const e: Enemy = {
-    id: state.nextId++,
-    kind,
-    hp,
-    maxHp: hp,
-    x: side < 0 ? -GROUND_SPAWN_X : WORLD_W + GROUND_SPAWN_X,
-    y: 0,
-    side,
-    phase: 'walk',
-    progress: 0,
-    slowTimer: 0,
-    slowAmount: 0,
-    stunTimer: 0,
-    emergeY: 0,
-    timer: 4,
-    wobble: nextFloat(state.rng) * Math.PI * 2,
-    targetSlot: -1,
-    hitFlash: 0,
-  };
+  // Objet recyclé depuis la réserve : chaque champ est réécrit.
+  const e = acquireEnemy();
+  e.id = state.nextId++;
+  e.kind = kind;
+  e.hp = hp;
+  e.maxHp = hp;
+  e.x = side < 0 ? -GROUND_SPAWN_X : WORLD_W + GROUND_SPAWN_X;
+  e.y = 0;
+  e.side = side;
+  e.phase = 'walk';
+  e.progress = 0;
+  e.slowTimer = 0;
+  e.slowAmount = 0;
+  e.stunTimer = 0;
+  e.emergeY = 0;
+  e.timer = 4;
+  e.wobble = nextFloat(state.rng) * Math.PI * 2;
+  e.targetSlot = -1;
+  e.hitFlash = 0;
   if (def.movement === 'flier') {
     const heart = heartPos(state.floors.length);
     // Arrivée par la gauche, la droite ou le haut, jamais par le dessous de l'île.
@@ -58,8 +64,7 @@ export function spawnEnemy(state: GameState, kind: EnemyKind, side: Side, opts: 
     e.side = e.x < CENTER_X ? -1 : 1;
     e.phase = 'fly';
     if (kind === 'planeur') {
-      const occupied = occupiedSlots(state);
-      if (occupied.length > 0) e.targetSlot = occupied[Math.floor(nextFloat(state.rng) * occupied.length)] ?? -1;
+      e.targetSlot = randomOccupiedSlot(state);
     }
   } else if (def.movement === 'burrower') {
     e.phase = 'burrow';
