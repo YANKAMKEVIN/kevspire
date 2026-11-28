@@ -51,6 +51,10 @@ export class App implements AppApi {
   private last = 0;
   private slowFrames = 0;
   private dprCap = 2;
+  private running = false;
+  private rafId = 0;
+  /** Images dessinées depuis le lancement (sert aux tests : rien ne tourne onglet caché). */
+  frames = 0;
 
   constructor(private canvas: HTMLCanvasElement, private ui: HTMLElement, private launch: LaunchOptions) {
     const loaded = loadSave(this.store);
@@ -62,7 +66,11 @@ export class App implements AppApi {
       if (document.hidden) {
         this.session?.autoPause();
         this.audio.suspend();
-      } else this.audio.resume();
+        this.stopLoop();
+      } else {
+        this.audio.resume();
+        this.startLoop();
+      }
     });
     const unlock = () => this.audio.unlock();
     window.addEventListener('pointerdown', unlock, { passive: true });
@@ -79,7 +87,8 @@ export class App implements AppApi {
     ]);
     this.applySettings();
     this.resize();
-    requestAnimationFrame((t) => this.loop(t));
+    (window as unknown as { __kevspire?: unknown }).__kevspire = { app: this, session: null };
+    this.startLoop();
     if (this.launch.level !== null) this.startLevel(this.launch.level);
     else this.go('title');
   }
@@ -175,15 +184,31 @@ export class App implements AppApi {
     this.renderer.resize(w, hgt, Math.min(window.devicePixelRatio || 1, this.dprCap));
   }
 
-  private loop(t: number): void {
+  /** Boucle d'affichage : arrêtée onglet caché (batterie), reprise sans saut de temps. */
+  private startLoop(): void {
+    if (this.running || document.hidden) return;
+    this.running = true;
+    this.last = 0;
+    this.rafId = requestAnimationFrame(this.tick);
+  }
+
+  private stopLoop(): void {
+    this.running = false;
+    cancelAnimationFrame(this.rafId);
+  }
+
+  /** Fonction liée une fois pour toutes : aucune fermeture allouée par image. */
+  private readonly tick = (t: number): void => {
+    if (!this.running) return;
     const dt = this.last ? Math.min(0.1, (t - this.last) / 1000) : 1 / 60;
     this.last = t;
+    this.frames++;
     if (this.session) {
       this.session.frame(dt);
       this.adaptQuality(dt);
     }
-    requestAnimationFrame((n) => this.loop(n));
-  }
+    this.rafId = requestAnimationFrame(this.tick);
+  };
 
   /** Qualité « auto » : si le téléphone peine, on baisse la résolution et les particules. */
   private adaptQuality(dt: number): void {
