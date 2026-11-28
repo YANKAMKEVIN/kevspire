@@ -32,7 +32,7 @@ function endWave(state: GameState): void {
   state.events.push({ type: 'waveEnd', wave: state.waveIndex, bonus: gold });
   clearProjectiles(state);
   state.waveIndex++;
-  if (state.waveIndex >= state.totalWaves) {
+  if (!state.endless && state.waveIndex >= state.totalWaves) {
     state.phase = 'won';
     state.events.push({ type: 'won' });
     return;
