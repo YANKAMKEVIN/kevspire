@@ -8,7 +8,9 @@ import { TOWERS } from '../data/towers';
 import { attachGestures } from '../input/gestures';
 import type { Renderer } from '../render/renderer';
 import type { SaveData } from '../save/schema';
-import { build, callWave, chooseFloor, sell, slotAvailable, upgrade, useAbility } from '../sim/commands';
+import { slotAvailable } from '../sim/commands';
+import { executeRecorded, finishRecording, startRecording } from '../sim/replay';
+import type { Command, Replay } from '../sim/replay';
 import type { GameEvent, GameState } from '../sim/state';
 import { FIXED_DT, step } from '../sim/step';
 import { buildRadial, towerPanel } from '../ui/buildMenu';
@@ -51,6 +53,11 @@ export class GameSession {
   private targeting = false;
   private detach: () => void;
   private ended = false;
+  /** Événements en cours de traitement (double tampon : aucune allocation par image). */
+  private spareEvents: GameEvent[] = [];
+  private consuming = false;
+  /** Enregistrement de la partie depuis son ouverture (rejouable avec playReplay, utile pour reproduire un bug). */
+  readonly replay: Replay;
 
   constructor(
     readonly state: GameState,
@@ -63,10 +70,11 @@ export class GameSession {
     private opts: SessionOptions,
   ) {
     this.biome = state.endless ? 'orage' : getLevel(state.levelId).biome;
+    this.replay = startRecording(state);
     this.speed = opts.speed;
     this.hud = new Hud({
       pause: () => this.openPause(),
-      callWave: () => this.cmd(() => callWave(this.state)),
+      callWave: () => this.cmd({ c: 'callWave' }),
       toggleSpeed: () => {
         this.speed = this.speed >= 3 ? 1 : this.speed + 1;
         this.hud.setSpeed(this.speed);
@@ -130,14 +138,21 @@ export class GameSession {
     this.botTimer -= FIXED_DT;
     if (this.botTimer > 0) return;
     this.botTimer = 0.25;
-    botTick(this.state);
+    botTick(this.state, [], this.replay.entries);
   }
 
   private consumeEvents(): void {
     const events = this.state.events;
-    if (events.length === 0) return;
-    this.state.events = [];
-    for (const ev of events) this.onEvent(ev);
+    if (events.length === 0 || this.consuming) return;
+    this.consuming = true;
+    this.state.events = this.spareEvents;
+    try {
+      for (const ev of events) this.onEvent(ev);
+    } finally {
+      events.length = 0;
+      this.spareEvents = events;
+      this.consuming = false;
+    }
   }
 
   private onEvent(ev: GameEvent): void {
@@ -164,6 +179,7 @@ export class GameSession {
       case 'won':
       case 'lost':
         this.ended = true;
+        finishRecording(this.replay, this.state);
         this.closePopup();
         this.hooks.finished(this.state);
         break;
@@ -182,8 +198,8 @@ export class GameSession {
 
   // ------------------------------------------------------------------ entrées
 
-  private cmd(fn: () => { ok: boolean }): boolean {
-    const r = fn();
+  private cmd(command: Command): boolean {
+    const r = executeRecorded(this.state, command, this.replay.entries);
     this.audio.play(r.ok ? 'click' : 'deny');
     return r.ok;
   }
@@ -195,7 +211,7 @@ export class GameSession {
       return;
     }
     if (kind === 'rafale') {
-      this.cmd(() => useAbility(this.state, 'rafale'));
+      this.cmd({ c: 'ability', kind: 'rafale', x: 0, y: 0 });
       return;
     }
     this.targeting = !this.targeting;
@@ -213,7 +229,7 @@ export class GameSession {
       this.targeting = false;
       this.hud.setTargeting(false);
       this.hud.setHint(null);
-      this.cmd(() => useAbility(this.state, 'eclat', w.x, w.y));
+      this.cmd({ c: 'ability', kind: 'eclat', x: w.x, y: w.y });
       return;
     }
     const slot = this.slotAt(w.x, w.y);
@@ -246,13 +262,13 @@ export class GameSession {
     this.audio.play('open');
     const handlers = {
       build: (s: number, kind: TowerKind) => {
-        if (this.cmd(() => build(this.state, s, kind))) this.closePopup();
+        if (this.cmd({ c: 'build', slot: s, kind })) this.closePopup();
       },
       upgrade: (s: number) => {
-        if (this.cmd(() => upgrade(this.state, s))) this.openSlot(s);
+        if (this.cmd({ c: 'upgrade', slot: s })) this.openSlot(s);
       },
       sell: (s: number) => {
-        if (this.cmd(() => sell(this.state, s))) this.closePopup();
+        if (this.cmd({ c: 'sell', slot: s })) this.closePopup();
       },
       preview: (kind: TowerKind | null) => {
         this.preview = kind ? TOWERS[kind].levels[0].range * this.state.modifiers.rangeMul : 0;
@@ -310,7 +326,7 @@ export class GameSession {
     if (this.opts.bot) return;
     this.audio.play('open');
     this.showModal(floorChoiceModal(this.state.floorChoices, (i) => {
-      chooseFloor(this.state, i);
+      executeRecorded(this.state, { c: 'chooseFloor', index: i }, this.replay.entries);
       this.consumeEvents();
       this.closeModal();
       this.hooks.checkpoint(this.state);
