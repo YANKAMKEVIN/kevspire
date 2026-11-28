@@ -1,6 +1,7 @@
 import { sample } from '../core/rng';
 import { FLOORS, FLOOR_ORDER } from '../data/floors';
 import { INTER_WAVE } from './create';
+import { clearProjectiles } from './projectiles';
 import { beginWaveSpawners, spawnersDone } from './spawn';
 import type { GameState } from './state';
 
@@ -29,9 +30,9 @@ function endWave(state: GameState): void {
   state.gold += gold;
   state.stats.goldEarned += gold;
   state.events.push({ type: 'waveEnd', wave: state.waveIndex, bonus: gold });
-  state.projectiles.length = 0;
+  clearProjectiles(state);
   state.waveIndex++;
-  if (state.waveIndex >= state.totalWaves) {
+  if (!state.endless && state.waveIndex >= state.totalWaves) {
     state.phase = 'won';
     state.events.push({ type: 'won' });
     return;

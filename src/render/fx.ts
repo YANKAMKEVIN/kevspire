@@ -58,7 +58,7 @@ export class Fx {
         break;
       }
       case 'chain':
-        P.spawn('chain', 0, 0, { life: 0.16, points: ev.points.slice() });
+        P.spawn('chain', 0, 0, { life: 0.16, points: ev.points });
         for (let i = 2; i + 1 < ev.points.length; i += 2) P.burst(ev.points[i] as number, ev.points[i + 1] as number, this.n(4), 'violet', 120, 6, 0.3);
         break;
       case 'kill': {

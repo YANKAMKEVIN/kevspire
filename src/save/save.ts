@@ -4,7 +4,7 @@ import { ENEMY_ORDER } from '../data/enemies';
 import { LEVELS } from '../data/levels';
 import { NO_UPGRADES, UPGRADES } from '../meta/upgrades';
 import type { UpgradeRanks } from '../meta/upgrades';
-import type { GameState } from '../sim/state';
+import { sanitizeRun } from './runCheck';
 import { DEFAULT_SETTINGS, SAVE_VERSION } from './schema';
 import type { LevelRecord, Quality, SaveData, SaveDataV1, Settings } from './schema';
 
@@ -17,6 +17,11 @@ export interface KeyValueStore {
 
 export const SAVE_KEY = 'kevspire.save';
 export const BACKUP_KEY = 'kevspire.save.bak';
+/**
+ * Copie intacte d'une sauvegarde principale illisible (corrompue, ou écrite par une
+ * version plus récente du jeu), mise à l'abri avant d'être écrasée : rien n'est perdu.
+ */
+export const QUARANTINE_KEY = 'kevspire.save.illisible';
 
 interface Envelope {
   sum: string;
@@ -79,13 +84,6 @@ function sanitizeSettings(raw: unknown): Settings {
   };
 }
 
-function sanitizeRun(raw: unknown): GameState | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const r = raw as Partial<GameState>;
-  const ok = r.version === 1 && typeof r.levelId === 'number' && Array.isArray(r.slots) && Array.isArray(r.floors) && typeof r.gold === 'number';
-  return ok ? ({ ...(r as GameState), events: [] }) : null;
-}
-
 /** Valide chaque champ : une sauvegarde abîmée ne doit jamais faire planter le jeu. */
 export function sanitize(raw: Record<string, unknown>): SaveData {
   const out = defaultSave();
@@ -138,16 +136,43 @@ export function loadSave(store: KeyValueStore): LoadResult {
   return { data: defaultSave(), source: 'neuve' };
 }
 
-/** Écrit la sauvegarde ; l'ancienne version valide devient la copie de secours. */
+/**
+ * Écrit la sauvegarde ; l'ancienne version valide devient la copie de secours, une
+ * ancienne version illisible est mise en quarantaine. Si le stockage est plein, la copie
+ * de secours est sacrifiée pour laisser passer la sauvegarde principale. Ne lève jamais.
+ */
 export function writeSave(store: KeyValueStore, data: SaveData): boolean {
+  data.writes++;
+  let encoded: string;
   try {
-    data.writes++;
-    const previous = safeGet(store, SAVE_KEY);
-    if (previous && decode(previous)) store.setItem(BACKUP_KEY, previous);
-    store.setItem(SAVE_KEY, encode(data));
+    encoded = encode(data);
+  } catch {
+    return false;
+  }
+  const previous = safeGet(store, SAVE_KEY);
+  if (previous) {
+    if (decode(previous)) safeSet(store, BACKUP_KEY, previous);
+    else if (safeGet(store, QUARANTINE_KEY) === null) safeSet(store, QUARANTINE_KEY, previous);
+  }
+  if (safeSet(store, SAVE_KEY, encoded)) return true;
+  safeRemove(store, BACKUP_KEY);
+  return safeSet(store, SAVE_KEY, encoded);
+}
+
+function safeSet(store: KeyValueStore, key: string, value: string): boolean {
+  try {
+    store.setItem(key, value);
     return true;
   } catch {
     return false;
+  }
+}
+
+function safeRemove(store: KeyValueStore, key: string): void {
+  try {
+    store.removeItem(key);
+  } catch {
+    // stockage inaccessible : rien à faire
   }
 }
 

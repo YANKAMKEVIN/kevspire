@@ -5,7 +5,7 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   {
     rules: {
-      'max-lines': ['error', { max: 450, skipBlankLines: true, skipComments: true }],
+      'max-lines': ['error', { max: 400, skipBlankLines: true, skipComments: true }],
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/consistent-type-imports': 'error',
     },

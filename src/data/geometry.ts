@@ -20,8 +20,13 @@ export function towerTop(floors: number): number {
   return floors * FLOOR_H;
 }
 
+/** Hauteur du Cœur (son X vaut toujours CENTER_X) : version sans allocation pour les boucles chaudes. */
+export function heartY(floors: number): number {
+  return towerTop(floors) + CROWN_H * 0.62;
+}
+
 export function heartPos(floors: number): { x: number; y: number } {
-  return { x: CENTER_X, y: towerTop(floors) + CROWN_H * 0.62 };
+  return { x: CENTER_X, y: heartY(floors) };
 }
 
 /** Emplacements 0 et 1 : postes du sommet, de part et d'autre du Cœur (étage -1). */
@@ -36,12 +41,24 @@ export function slotFromId(id: number): { floor: number; side: -1 | 1 } {
   return { floor: Math.floor(id / 2) - 1, side: id % 2 === 0 ? -1 : 1 };
 }
 
+/** Abscisse d'un emplacement (sans allocation). */
+export function slotX(id: number): number {
+  const floor = Math.floor(id / 2) - 1;
+  const side = id % 2 === 0 ? -1 : 1;
+  if (floor === CROWN_FLOOR) return CENTER_X + side * CROWN_SLOT_DX;
+  return side < 0 ? WALL_LEFT - BALCONY_REACH : WALL_RIGHT + BALCONY_REACH;
+}
+
+/** Ordonnée d'un emplacement (sans allocation) ; les postes du sommet suivent la tour. */
+export function slotY(id: number, floors: number): number {
+  const floor = Math.floor(id / 2) - 1;
+  if (floor === CROWN_FLOOR) return towerTop(floors) + 30;
+  return floor * FLOOR_H + BALCONY_Y + 18;
+}
+
 /** Position d'un emplacement ; les postes du sommet suivent la tour quand elle grandit. */
 export function slotPos(id: number, floors: number): { x: number; y: number } {
-  const { floor, side } = slotFromId(id);
-  if (floor === CROWN_FLOOR) return { x: CENTER_X + side * CROWN_SLOT_DX, y: towerTop(floors) + 30 };
-  const x = side < 0 ? WALL_LEFT - BALCONY_REACH : WALL_RIGHT + BALCONY_REACH;
-  return { x, y: floor * FLOOR_H + BALCONY_Y + 18 };
+  return { x: slotX(id), y: slotY(id, floors) };
 }
 
 export function slotCount(maxFloors: number): number {

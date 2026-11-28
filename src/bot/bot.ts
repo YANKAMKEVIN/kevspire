@@ -4,7 +4,9 @@ import { ENEMIES } from '../data/enemies';
 import { FLOOR_H, heartPos, slotFromId, slotId, towerTop } from '../data/geometry';
 import { LEVELS } from '../data/levels';
 import { TOWERS, TOWER_ORDER } from '../data/towers';
-import { build, buildCost, callWave, chooseFloor, slotAvailable, upgrade, upgradeCost, useAbility } from '../sim/commands';
+import { buildCost, slotAvailable, upgradeCost } from '../sim/commands';
+import { executeRecorded } from '../sim/replay';
+import type { Command, ReplayEntry } from '../sim/replay';
 import type { GameState } from '../sim/state';
 
 /**
@@ -14,6 +16,18 @@ import type { GameState } from '../sim/state';
 export interface BotAction {
   type: 'build' | 'upgrade' | 'callWave' | 'chooseFloor' | 'ability';
   detail: string;
+}
+
+/** Contexte d'une décision : journal lisible et, en option, enregistrement pour le rejeu. */
+interface Ctx {
+  log: BotAction[];
+  record?: ReplayEntry[];
+}
+
+function act(state: GameState, ctx: Ctx, cmd: Command, type: BotAction['type'], detail: string): boolean {
+  if (!executeRecorded(state, cmd, ctx.record).ok) return false;
+  ctx.log.push({ type, detail });
+  return true;
 }
 
 const FLOOR_PREF: readonly FloorKind[] = ['atelier', 'belvedere', 'rempart', 'sanctuaire', 'comptoir'];
@@ -53,27 +67,27 @@ function slotOrder(state: GameState): number[] {
   return order;
 }
 
-function upgradeCrown(state: GameState, log: BotAction[]): boolean {
+function upgradeCrown(state: GameState, ctx: Ctx): boolean {
   for (const slot of [0, 1]) {
     const t = state.slots[slot];
     if (!t || t.level >= 3) continue;
     const cost = upgradeCost(state, t);
     if (cost === null || state.gold < cost) return false;
-    if (upgrade(state, slot).ok) log.push({ type: 'upgrade', detail: `${slot}` });
+    act(state, ctx, { c: 'upgrade', slot }, 'upgrade', `${slot}`);
   }
   return true;
 }
 
-function spend(state: GameState, log: BotAction[]): void {
+function spend(state: GameState, ctx: Ctx): void {
   const built = state.slots.filter(Boolean).length;
   // 0. Les postes du sommet d'abord au maximum : c'est là que tout converge.
-  if (built >= 5 && !upgradeCrown(state, log)) return;
+  if (built >= 5 && !upgradeCrown(state, ctx)) return;
   // 1. Remplir les emplacements libres.
   for (const slot of slotOrder(state)) {
     if (!slotAvailable(state, slot) || state.slots[slot]) continue;
     const kind = kindForSlot(state, slot);
     if (state.gold < buildCost(state, kind)) return;
-    if (build(state, slot, kind).ok) log.push({ type: 'build', detail: `${kind}@${slot}` });
+    act(state, ctx, { c: 'build', slot, kind }, 'build', `${kind}@${slot}`);
   }
   // 2. Améliorer la tourelle la moins avancée (priorité aux étages hauts).
   for (;;) {
@@ -93,11 +107,11 @@ function spend(state: GameState, log: BotAction[]): void {
     const tower = state.slots[best];
     const cost = tower ? upgradeCost(state, tower) : null;
     if (cost === null || state.gold < cost) return;
-    if (upgrade(state, best).ok) log.push({ type: 'upgrade', detail: `${best}` });
+    if (!act(state, ctx, { c: 'upgrade', slot: best }, 'upgrade', `${best}`)) return;
   }
 }
 
-function useAbilities(state: GameState, log: BotAction[]): void {
+function useAbilities(state: GameState, ctx: Ctx): void {
   const top = towerTop(state.floors.length);
   const heart = heartPos(state.floors.length);
   const danger = state.enemies.filter(
@@ -112,23 +126,27 @@ function useAbilities(state: GameState, log: BotAction[]): void {
       cx += e.x;
       cy += e.y;
     }
-    if (useAbility(state, 'eclat', cx / danger.length, cy / danger.length).ok) log.push({ type: 'ability', detail: 'eclat' });
+    act(state, ctx, { c: 'ability', kind: 'eclat', x: cx / danger.length, y: cy / danger.length }, 'ability', 'eclat');
   }
-  if (danger.length >= 3 && state.abilities.rafale.cooldown <= 0 && useAbility(state, 'rafale').ok) {
-    log.push({ type: 'ability', detail: 'rafale' });
+  if (danger.length >= 3 && state.abilities.rafale.cooldown <= 0) {
+    act(state, ctx, { c: 'ability', kind: 'rafale', x: 0, y: 0 }, 'ability', 'rafale');
   }
 }
 
-/** Une décision du bot. À appeler régulièrement (toutes les ~0,25 s de jeu). */
-export function botTick(state: GameState, log: BotAction[] = []): BotAction[] {
+/**
+ * Une décision du bot. À appeler régulièrement (toutes les ~0,25 s de jeu).
+ * `record` reçoit les commandes réussies, horodatées, pour un rejeu déterministe.
+ */
+export function botTick(state: GameState, log: BotAction[] = [], record?: ReplayEntry[]): BotAction[] {
+  const ctx: Ctx = { log, record };
   if (state.phase === 'choose') {
     const idx = FLOOR_PREF.map((k) => state.floorChoices.indexOf(k)).find((i) => i >= 0) ?? 0;
-    if (chooseFloor(state, idx).ok) log.push({ type: 'chooseFloor', detail: state.floors[state.floors.length - 1] ?? '' });
+    act(state, ctx, { c: 'chooseFloor', index: idx }, 'chooseFloor', state.floorChoices[idx] ?? '');
     return log;
   }
   if (state.phase !== 'prep' && state.phase !== 'wave') return log;
-  spend(state, log);
-  if (state.phase === 'wave') useAbilities(state, log);
-  if (state.phase === 'prep' && callWave(state).ok) log.push({ type: 'callWave', detail: `${state.waveIndex}` });
+  spend(state, ctx);
+  if (state.phase === 'wave') useAbilities(state, ctx);
+  if (state.phase === 'prep') act(state, ctx, { c: 'callWave' }, 'callWave', `${state.waveIndex}`);
   return log;
 }

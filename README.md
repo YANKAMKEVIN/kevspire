@@ -33,12 +33,13 @@ npm run dev        # puis ouvrir l'adresse affichée (aussi depuis un téléphon
 | Commande | Rôle |
 |---|---|
 | `npm run typecheck` | TypeScript strict (`noUncheckedIndexedAccess`, etc.) |
-| `npm run lint` | ESLint, fichiers limités à 450 lignes (pas de fichier-dieu) |
-| `npm test` | 126 tests Vitest, dont **la campagne entière jouée par le bot** |
-| `npm run e2e` | Playwright sur un Pixel 7 émulé : parcours joueur au doigt + campagne complète dans le vrai jeu |
+| `npm run lint` | ESLint, fichiers limités à 400 lignes (pas de fichier-dieu) |
+| `npm test` | 188 tests Vitest, dont **la campagne entière jouée par le bot** et son **rejeu à l'identique** |
+| `npm run balance` | Audit d'équilibrage headless : chaque niveau gagné par le bot sur 5 graines, perdu par un joueur passif ou paresseux (`-- --check` échoue sinon, lancé en CI) |
+| `npm run e2e` | Playwright sur un Pixel 7 émulé : parcours joueur, **gestes tactiles réels** (poser, améliorer, vendre, faire défiler), onglet caché, résolution plafonnée, campagne complète dans le vrai jeu (`PW_PORT` pour changer de port) |
 | `npm run verify` | Tout ce qui précède sauf l'e2e |
 
-La CI GitHub Actions bloque sur le typage, le lint, les tests, le build et les tests de bout en bout.
+La CI GitHub Actions bloque sur le typage, le lint, les tests, l'audit d'équilibrage, le build et les tests de bout en bout.
 
 ## Architecture
 
@@ -57,8 +58,9 @@ src/
 ```
 
 - **Simulation** : état 100 % JSON (reprise de partie exacte), pas fixe de 1/60 s, événements consommés par le rendu et l'audio.
-- **Sauvegarde** : enveloppe `{sum, data}`, migration v1 → v2 testée, repli automatique sur la copie de secours, partie en cours sauvegardée à chaque vague.
-- **Perf mobile** : réserve de particules sans allocation, halos pré-rendus, images WebP redimensionnées, résolution plafonnée et **qualité auto** qui baisse résolution et effets si le téléphone peine, pause automatique en arrière-plan.
+- **Rejeu déterministe** (`sim/replay.ts`) : chaque commande du joueur est une donnée horodatée en pas de simulation ; `playReplay` rejoue une partie depuis son état de départ et `verifyReplay` compare l'empreinte finale. La session en cours expose son journal (`window.__kevspire.session.replay`) pour reproduire un bug.
+- **Sauvegarde** : enveloppe `{sum, data}`, migration v1 → v2 testée, repli automatique sur la copie de secours, partie en cours sauvegardée à chaque vague et validée champ par champ à la lecture (`save/runCheck.ts`), sauvegarde illisible mise en quarantaine plutôt qu'écrasée, stockage plein ou indisponible géré.
+- **Perf mobile** : réserves de projectiles, de Brumâmes et de particules (aucun objet alloué par tir ni par apparition, vérifié par les tests), boucle de simulation et de rendu sans allocation par image, halos pré-rendus, images WebP redimensionnées, résolution plafonnée et **qualité auto** qui baisse résolution et effets si le téléphone peine, pause automatique et boucle d'affichage arrêtée en arrière-plan.
 
 ## Direction artistique
 

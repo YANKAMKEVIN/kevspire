@@ -33,6 +33,9 @@ export interface Particle {
   points: number[];
 }
 
+/** Tracé vide partagé (jamais modifié) : évite un tableau neuf par particule. */
+const NO_POINTS: number[] = [];
+
 /** Réserve de particules sans allocation en cours de partie (perf mobile). */
 export class ParticleSystem {
   private pool: Particle[] = [];
@@ -50,7 +53,14 @@ export class ParticleSystem {
   }
 
   spawn(kind: ParticleKind, x: number, y: number, o: Partial<Particle> = {}): Particle | null {
-    let p = this.pool.find((q) => !q.active);
+    let p: Particle | undefined;
+    for (let i = 0; i < this.pool.length; i++) {
+      const q = this.pool[i] as Particle;
+      if (!q.active) {
+        p = q;
+        break;
+      }
+    }
     if (!p) {
       if (this.pool.length >= this.budget) return null;
       p = { active: false, kind, x, y, vx: 0, vy: 0, life: 0, maxLife: 0, size: 0, grow: 0, color: 'gold', gravity: 0, drag: 0, text: '', points: [] };
@@ -69,7 +79,7 @@ export class ParticleSystem {
     p.gravity = o.gravity ?? 0;
     p.drag = o.drag ?? 0;
     p.text = o.text ?? '';
-    p.points = o.points ?? [];
+    p.points = o.points ?? NO_POINTS;
     return p;
   }
 

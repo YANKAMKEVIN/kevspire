@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "e2e": "playwright test --trace off",
     "assets": "node tools/assets.mjs",
+    "balance": "vite-node tools/balance.ts",
     "verify": "npm run typecheck && npm run lint && npm test && npm run build"
   },
   "devDependencies": {

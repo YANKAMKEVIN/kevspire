@@ -24,6 +24,8 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
+      - name: Équilibrage joué par le bot (aucun niveau impossible, fragile ou trivial)
+        run: npm run balance -- --check
       - run: npm run build
       - uses: actions/upload-artifact@v4
         with:

@@ -1,8 +1,9 @@
 import type { BiomeId } from '../core/types';
 import { ENEMIES } from '../data/enemies';
-import { slotFromId, slotPos } from '../data/geometry';
+import { slotPos, slotX, slotY } from '../data/geometry';
 import { slotAvailable, buildCost } from '../sim/commands';
 import type { GameState } from '../sim/state';
+import { findEnemy } from '../sim/enemies';
 import { towerStats } from '../sim/towers';
 import type { Assets } from './assets';
 import { makeGlowSprite } from './assets';
@@ -16,6 +17,9 @@ import {
   drawBalconies, drawCrown, drawEmptySlot, drawFloors, drawHeart, drawIsland, drawTurret,
 } from './towerArt';
 import type { TowerView } from './towerArt';
+
+/** Couches du rayon du Phare (largeur, couleur), déclarées une fois pour toutes. */
+const BEAM_LAYERS: readonly (readonly [number, string])[] = [[14, 'rgba(255,200,87,0.25)'], [6, 'rgba(255,236,170,0.7)'], [2.2, 'rgba(255,255,255,0.95)']];
 
 export interface Overlay {
   selectedSlot: number;
@@ -35,6 +39,8 @@ export class Renderer {
   private g: CanvasRenderingContext2D;
   private dpr = 1;
   private fireflyTimer = 0;
+  /** Contexte de dessin réutilisé à chaque image (pas d'allocation). */
+  private view: TowerView;
   time = 0;
 
   constructor(private canvas: HTMLCanvasElement, private assets: Assets) {
@@ -44,6 +50,7 @@ export class Renderer {
     this.fx = new Fx(this.particles, this.cam);
     this.glowGold = makeGlowSprite(128, '255,200,87');
     this.glowCyan = makeGlowSprite(128, '111,243,224');
+    this.view = { g, cam: this.cam, assets, time: 0 };
   }
 
   resize(cssW: number, cssH: number, dpr: number): void {
@@ -77,7 +84,8 @@ export class Renderer {
     const style = BIOMES[biome];
     g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     g.imageSmoothingQuality = 'high';
-    const v: TowerView = { g, cam, assets: this.assets, time: this.time };
+    const v = this.view;
+    v.time = this.time;
     this.bg.drawSky(g, cam, this.assets, style, this.time);
     this.bg.drawClouds(g, cam, style, 0);
     drawIsland(v);
@@ -113,17 +121,17 @@ export class Renderer {
     const g = this.g;
     const cam = this.cam;
     g.globalCompositeOperation = 'lighter';
-    state.slots.forEach((t, slot) => {
-      if (!t || t.kind !== 'phare' || !t.targetId || t.disabled > 0) return;
-      const target = state.enemies.find((e) => e.id === t.targetId);
-      if (!target) return;
-      const p = slotPos(slot, state.floors.length);
-      const ox = cam.toScreenX(p.x + (slotFromId(slot).side < 0 ? -10 : 10));
-      const oy = cam.toScreenY(p.y + 30);
+    for (let slot = 0; slot < state.slots.length; slot++) {
+      const t = state.slots[slot];
+      if (!t || t.kind !== 'phare' || !t.targetId || t.disabled > 0) continue;
+      const target = findEnemy(state, t.targetId);
+      if (!target) continue;
+      const ox = cam.toScreenX(slotX(slot) + (slot % 2 === 0 ? -10 : 10));
+      const oy = cam.toScreenY(slotY(slot, state.floors.length) + 30);
       const tx = cam.toScreenX(target.x);
       const ty = cam.toScreenY(target.y);
       const f = 0.5 + t.focus / 2.2;
-      for (const [w, col] of [[14, 'rgba(255,200,87,0.25)'], [6, 'rgba(255,236,170,0.7)'], [2.2, 'rgba(255,255,255,0.95)']] as const) {
+      for (const [w, col] of BEAM_LAYERS) {
         g.strokeStyle = col;
         g.lineWidth = w * cam.scale * f * (0.9 + Math.random() * 0.2);
         g.beginPath();
@@ -134,7 +142,7 @@ export class Renderer {
       const r = 26 * cam.scale * f;
       g.drawImage(this.glowGold, tx - r, ty - r, r * 2, r * 2);
       if (Math.random() < 0.3) this.particles.spawn('spark', target.x, target.y, { vx: (Math.random() - 0.5) * 220, vy: Math.random() * 200, life: 0.25, size: 6, color: 'gold' });
-    });
+    }
     g.globalCompositeOperation = 'source-over';
   }
 
@@ -192,7 +200,6 @@ export class Renderer {
 
   /** Flèches au bord de l'écran pour les Brumâmes hors champ. */
   private drawIndicators(state: GameState): void {
-    const g = this.g;
     const cam = this.cam;
     const top = cam.y + cam.worldViewH;
     let above = 0;
@@ -203,24 +210,26 @@ export class Renderer {
       else if (e.y < cam.y - 10) below++;
     }
     const pulse = 0.6 + 0.4 * Math.sin(this.time * 6);
-    const arrow = (y: number, dir: 1 | -1, count: number) => {
-      const x = cam.viewW / 2;
-      g.globalAlpha = pulse;
-      g.fillStyle = '#ff5ac8';
-      g.beginPath();
-      g.moveTo(x, y);
-      g.lineTo(x - 14, y + dir * 14);
-      g.lineTo(x + 14, y + dir * 14);
-      g.closePath();
-      g.fill();
-      g.globalAlpha = 1;
-      g.font = '800 13px Nunito, sans-serif';
-      g.textAlign = 'center';
-      g.fillStyle = '#fff';
-      g.fillText(String(count), x, y + dir * 28 + 4);
-    };
-    if (above > 0) arrow(96, 1, above);
-    if (below > 0) arrow(cam.viewH - 150, -1, below);
+    if (above > 0) this.drawArrow(96, 1, above, pulse);
+    if (below > 0) this.drawArrow(cam.viewH - 150, -1, below, pulse);
+  }
+
+  private drawArrow(y: number, dir: 1 | -1, count: number, pulse: number): void {
+    const g = this.g;
+    const x = this.cam.viewW / 2;
+    g.globalAlpha = pulse;
+    g.fillStyle = '#ff5ac8';
+    g.beginPath();
+    g.moveTo(x, y);
+    g.lineTo(x - 14, y + dir * 14);
+    g.lineTo(x + 14, y + dir * 14);
+    g.closePath();
+    g.fill();
+    g.globalAlpha = 1;
+    g.font = '800 13px Nunito, sans-serif';
+    g.textAlign = 'center';
+    g.fillStyle = '#fff';
+    g.fillText(String(count), x, y + dir * 28 + 4);
   }
 
   private drawTargetingHint(): void {

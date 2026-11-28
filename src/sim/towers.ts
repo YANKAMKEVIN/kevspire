@@ -1,9 +1,10 @@
 import { dist2 } from '../core/math';
 import { FLOORS } from '../data/floors';
-import { slotFromId, slotPos } from '../data/geometry';
+import { slotX, slotY } from '../data/geometry';
 import { PHARE_FOCUS_MAX, PHARE_FOCUS_TIME, TOWERS } from '../data/towers';
 import type { TowerLevelStats } from '../data/towers';
-import { damageEnemy, isAir, isTargetable, slowEnemy } from './enemies';
+import { damageEnemy, findEnemy, isAir, isTargetable, slowEnemy } from './enemies';
+import { acquireProjectile } from './pool';
 import type { Enemy, GameState, Tower } from './state';
 
 const SLOW_DURATION = 1.6;
@@ -14,35 +15,49 @@ export interface EffectiveStats extends TowerLevelStats {
   y: number;
 }
 
-/** Statistiques d'une tourelle avec bonus d'étage et d'atelier. */
-export function towerStats(state: GameState, slot: number, tower: Tower): EffectiveStats {
-  const { floor } = slotFromId(slot);
+function blankStats(): EffectiveStats {
+  return { cost: 0, damage: 0, rate: 0, range: 0, radius: 0, slow: 0, targets: 0, x: 0, y: 0 };
+}
+
+/**
+ * Statistiques d'une tourelle avec bonus d'étage et d'atelier.
+ * `out` permet de réutiliser un objet (boucle de simulation sans allocation).
+ */
+export function towerStats(state: GameState, slot: number, tower: Tower, out: EffectiveStats = blankStats()): EffectiveStats {
+  const floor = Math.floor(slot / 2) - 1;
   const base = TOWERS[tower.kind].levels[tower.level - 1];
   if (!base) throw new Error(`Niveau de tourelle invalide : ${tower.level}`);
   const floorKind = floor >= 0 ? state.floors[floor] : null;
   const fdef = floorKind ? FLOORS[floorKind] : null;
-  const pos = slotPos(slot, state.floors.length);
-  return {
-    ...base,
-    range: base.range * (1 + (fdef?.rangeBonus ?? 0)) * state.modifiers.rangeMul,
-    rate: base.rate * (1 + (fdef?.rateBonus ?? 0)),
-    x: pos.x,
-    y: pos.y,
-  };
+  out.cost = base.cost;
+  out.damage = base.damage;
+  out.radius = base.radius;
+  out.slow = base.slow;
+  out.targets = base.targets;
+  out.range = base.range * (1 + (fdef?.rangeBonus ?? 0)) * state.modifiers.rangeMul;
+  out.rate = base.rate * (1 + (fdef?.rateBonus ?? 0));
+  out.x = slotX(slot);
+  out.y = slotY(slot, state.floors.length);
+  return out;
 }
+
+/** Objet de travail réutilisé à chaque pas par `updateTowers`. */
+const scratch = blankStats();
+/** Cibles déjà touchées par un éclair en chaîne (réutilisé). */
+const chainHit: number[] = [];
 
 function canHit(tower: Tower, e: Enemy): boolean {
   const def = TOWERS[tower.kind];
   return isTargetable(e) && (isAir(e) ? def.hitsAir : def.hitsGround);
 }
 
-/** Cible la Brumâme la plus avancée dans la portée. */
-export function findTarget(state: GameState, tower: Tower, s: EffectiveStats, exclude?: Set<number>): Enemy | null {
+/** Cible la Brumâme la plus avancée dans la portée (`excludeId` : une cible à ignorer). */
+export function findTarget(state: GameState, tower: Tower, s: EffectiveStats, excludeId = -1): Enemy | null {
   const r2 = s.range * s.range;
   const min2 = TOWERS[tower.kind].minRange ** 2;
   let best: Enemy | null = null;
   for (const e of state.enemies) {
-    if (!canHit(tower, e) || exclude?.has(e.id)) continue;
+    if (e.id === excludeId || !canHit(tower, e)) continue;
     const d2 = dist2(s.x, s.y, e.x, e.y);
     if (d2 > r2 || d2 < min2) continue;
     if (!best || e.progress > best.progress) best = e;
@@ -51,14 +66,30 @@ export function findTarget(state: GameState, tower: Tower, s: EffectiveStats, ex
 }
 
 function enemyById(state: GameState, id: number): Enemy | undefined {
-  return state.enemies.find((e) => e.id === id && e.hp > 0);
+  const e = findEnemy(state, id);
+  return e && e.hp > 0 ? e : undefined;
+}
+
+function launch(state: GameState, kind: 'bolt' | 'shell', s: EffectiveStats, target: Enemy, ty: number, speed: number, radius: number, duration: number): void {
+  const p = acquireProjectile();
+  p.kind = kind;
+  p.x = p.sx = s.x;
+  p.y = p.sy = s.y;
+  p.tx = target.x;
+  p.ty = ty;
+  p.targetId = target.id;
+  p.damage = s.damage;
+  p.damageType = 'phys';
+  p.speed = speed;
+  p.radius = radius;
+  p.t = 0;
+  p.duration = duration;
+  p.alive = true;
+  state.projectiles.push(p);
 }
 
 function fireBolt(state: GameState, s: EffectiveStats, target: Enemy): void {
-  state.projectiles.push({
-    kind: 'bolt', x: s.x, y: s.y, sx: s.x, sy: s.y, tx: target.x, ty: target.y, targetId: target.id,
-    damage: s.damage, damageType: 'phys', speed: TOWERS.baliste.projectileSpeed, radius: 0, t: 0, duration: 0, alive: true,
-  });
+  launch(state, 'bolt', s, target, target.y, TOWERS.baliste.projectileSpeed, 0, 0);
 }
 
 function fireShell(state: GameState, s: EffectiveStats, target: Enemy): void {
@@ -66,10 +97,7 @@ function fireShell(state: GameState, s: EffectiveStats, target: Enemy): void {
   const duration = 0.45 + d / TOWERS.mortier.projectileSpeed;
   // Visée anticipée : les grimpeurs montent, on vise un peu plus haut.
   const lead = target.phase === 'climb' ? 26 * duration : 0;
-  state.projectiles.push({
-    kind: 'shell', x: s.x, y: s.y, sx: s.x, sy: s.y, tx: target.x, ty: target.y + lead, targetId: target.id,
-    damage: s.damage, damageType: 'phys', speed: 0, radius: s.radius, t: 0, duration, alive: true,
-  });
+  launch(state, 'shell', s, target, target.y + lead, 0, s.radius, duration);
 }
 
 function pulse(state: GameState, slot: number, s: EffectiveStats): boolean {
@@ -86,12 +114,13 @@ function pulse(state: GameState, slot: number, s: EffectiveStats): boolean {
 }
 
 function chain(state: GameState, tower: Tower, s: EffectiveStats, first: Enemy): void {
-  const hit = new Set<number>();
+  chainHit.length = 0;
+  // Le tracé part dans l'événement (consommé par le rendu) : seule allocation, une par décharge.
   const points: number[] = [s.x, s.y];
   let current: Enemy | null = first;
   let dmg = s.damage;
   for (let n = 0; n < s.targets && current; n++) {
-    hit.add(current.id);
+    chainHit.push(current.id);
     points.push(current.x, current.y);
     const cx = current.x;
     const cy = current.y;
@@ -100,7 +129,7 @@ function chain(state: GameState, tower: Tower, s: EffectiveStats, first: Enemy):
     let next: Enemy | null = null;
     let bestD = s.radius * s.radius;
     for (const e of state.enemies) {
-      if (hit.has(e.id) || !canHit(tower, e)) continue;
+      if (chainHit.includes(e.id) || !canHit(tower, e)) continue;
       const d2 = dist2(cx, cy, e.x, e.y);
       if (d2 <= bestD) {
         bestD = d2;
@@ -140,7 +169,7 @@ export function updateTowers(state: GameState, dt: number): void {
       tower.targetId = 0;
       continue;
     }
-    const s = towerStats(state, slot, tower);
+    const s = towerStats(state, slot, tower, scratch);
     if (tower.kind === 'phare') {
       updatePhare(state, tower, s, dt);
       continue;
@@ -159,7 +188,7 @@ export function updateTowers(state: GameState, dt: number): void {
     if (tower.kind === 'baliste') {
       fireBolt(state, s, target);
       if (s.targets > 1) {
-        const second = findTarget(state, tower, s, new Set([target.id]));
+        const second = findTarget(state, tower, s, target.id);
         if (second) fireBolt(state, s, second);
       }
     } else if (tower.kind === 'mortier') fireShell(state, s, target);
